@@ -1,0 +1,11 @@
+{
+    "cookie": "your_patreon_cookie_here",
+    "output_dir": "./downloads",
+    "request_delay": 2.0,
+    "max_retries": 3,
+    "post_dir_format": "{yyyy}-{mm}-{dd}_{title}",
+    "output_info_json": true,
+    "enable_threading": false,
+    "max_workers": 4,
+    "skip_existing": true
+}
