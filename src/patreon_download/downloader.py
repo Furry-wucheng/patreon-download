@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -83,53 +84,90 @@ def _file_size(path: Path) -> int:
 
 # ── Single file download ─────────────────────────────────────────
 
-def _download_file(url: str, dest: Path, cookie: str) -> bool:
-    """Download a single file. Returns True on success."""
+def _download_file(
+    url: str, dest: Path, cookie: str, max_retries: int = 3,
+) -> bool:
+    """Download a single file, retrying failures. Returns True on success."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        resp = requests.get(
-            url,
-            headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
-            stream=True,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return True
-    except Exception:
-        dest.unlink(missing_ok=True)
-        return False
+    attempts = max(1, max_retries)
+    for attempt in range(attempts):
+        try:
+            resp = requests.get(
+                url,
+                headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
+                stream=True,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            with open(dest, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return True
+        except Exception:
+            dest.unlink(missing_ok=True)
+            if attempt < attempts - 1:
+                time.sleep(min(2 ** attempt, 30))
+    return False
 
 
 def _download_file_progress(
     url: str, dest: Path, cookie: str,
     progress: Progress, task_id: TaskID,
+    max_retries: int = 3,
 ) -> bool:
-    """Download a single file with progress bar updates. Returns True on success."""
+    """Download a file with visible retry and progress updates."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        resp = requests.get(
-            url,
-            headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
-            stream=True,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        total = int(resp.headers.get("content-length", 0))
-        progress.update(task_id, total=total or None)
+    attempts = max(1, max_retries)
+    last_error: Exception | None = None
 
-        with open(dest, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
-                progress.advance(task_id, len(chunk))
+    for attempt in range(attempts):
+        try:
+            progress.reset(
+                task_id, total=None, completed=0,
+                description=dest.name,
+            )
+            resp = requests.get(
+                url,
+                headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
+                stream=True,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            total = int(resp.headers.get("content-length", 0))
+            progress.update(task_id, total=total or None)
 
-        return True
-    except Exception:
-        progress.update(task_id, description=f"[red]{dest.name} FAILED[/red]")
-        dest.unlink(missing_ok=True)
-        return False
+            with open(dest, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    progress.advance(task_id, len(chunk))
+
+            return True
+        except Exception as exc:
+            last_error = exc
+            dest.unlink(missing_ok=True)
+            if attempt < attempts - 1:
+                delay = min(2 ** attempt, 30)
+                progress.update(
+                    task_id,
+                    description=(
+                        f"[yellow]{dest.name} RETRY "
+                        f"{attempt + 2}/{attempts} in {delay}s[/yellow]"
+                    ),
+                    completed=0,
+                    total=None,
+                )
+                time.sleep(delay)
+
+    progress.update(
+        task_id,
+        description=f"[red]{dest.name} FAILED after {attempts} attempts[/red]",
+        completed=0,
+        total=None,
+    )
+    progress.console.print(
+        f"  {dest.name} failed: {last_error}", style="red", markup=False,
+    )
+    return False
 
 
 # ── Dedup logic ──────────────────────────────────────────────────
@@ -137,6 +175,7 @@ def _download_file_progress(
 def _resolve_download(
     url: str, dest: Path, cookie: str,
     skip_existing: bool, registry: HashRegistry | None,
+    max_retries: int = 3,
 ) -> tuple[bool, bool]:
     """Decide whether and how to get a file.
 
@@ -145,7 +184,7 @@ def _resolve_download(
     """
     if not skip_existing:
         # Always download, overwrite existing
-        return _download_file(url, dest, cookie), False
+        return _download_file(url, dest, cookie, max_retries), False
 
     # ── Skip-existing mode ───────────────────────────────────────
 
@@ -168,7 +207,7 @@ def _resolve_download(
         # We don't know the hash yet (haven't downloaded), so just download
         pass
 
-    ok = _download_file(url, dest, cookie)
+    ok = _download_file(url, dest, cookie, max_retries)
 
     # Register hash after successful download
     if ok and registry:
@@ -188,10 +227,13 @@ def _resolve_download_progress(
     url: str, dest: Path, cookie: str,
     progress: Progress, task_id: TaskID,
     skip_existing: bool, registry: HashRegistry | None,
+    max_retries: int = 3,
 ) -> tuple[bool, bool]:
     """Same as _resolve_download but with progress bar."""
     if not skip_existing:
-        ok = _download_file_progress(url, dest, cookie, progress, task_id)
+        ok = _download_file_progress(
+            url, dest, cookie, progress, task_id, max_retries,
+        )
         return ok, False
 
     if dest.is_file():
@@ -203,7 +245,9 @@ def _resolve_download_progress(
         )
         return False, True
 
-    ok = _download_file_progress(url, dest, cookie, progress, task_id)
+    ok = _download_file_progress(
+        url, dest, cookie, progress, task_id, max_retries,
+    )
 
     if ok and registry:
         file_hash = _compute_hash(dest)
@@ -259,6 +303,7 @@ _PROGRESS_COLUMNS = (
 def _download_batch_sequential(
     tasks: list[tuple[str, Path, str]],
     skip_existing: bool, registry: HashRegistry | None,
+    max_retries: int = 3,
 ) -> int:
     """Download files one by one with individual progress bars."""
     count = 0
@@ -270,6 +315,7 @@ def _download_batch_sequential(
             task_id = progress.add_task(dest.name, total=None)
             ok, _ = _resolve_download_progress(
                 url, dest, cookie, progress, task_id, skip_existing, registry,
+                max_retries,
             )
             if ok:
                 count += 1
@@ -280,6 +326,7 @@ def _download_batch_threaded(
     tasks: list[tuple[str, Path, str]],
     max_workers: int,
     skip_existing: bool, registry: HashRegistry | None,
+    max_retries: int = 3,
 ) -> int:
     """Download files concurrently with a shared progress display."""
     if not tasks:
@@ -300,6 +347,7 @@ def _download_batch_threaded(
             tid = task_ids[url]
             ok, _ = _resolve_download_progress(
                 url, dest, cookie, progress, tid, skip_existing, registry,
+                max_retries,
             )
             if ok:
                 with lock:
@@ -334,8 +382,13 @@ def _download_media_items(
         return 0
 
     if config.enable_threading:
-        return _download_batch_threaded(tasks, config.max_workers, config.skip_existing, registry)
-    return _download_batch_sequential(tasks, config.skip_existing, registry)
+        return _download_batch_threaded(
+            tasks, config.max_workers, config.skip_existing, registry,
+            config.max_retries,
+        )
+    return _download_batch_sequential(
+        tasks, config.skip_existing, registry, config.max_retries,
+    )
 
 
 # ── Post / Product download ──────────────────────────────────────

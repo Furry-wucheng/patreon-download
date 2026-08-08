@@ -118,6 +118,25 @@ class TestParseMediaItem:
 
 # ── Post parsing ─────────────────────────────────────────────────
 
+class TestInitialData:
+    """Test creator metadata extraction from Patreon HTML."""
+
+    def test_streaming_campaign_url_does_not_include_json_escape(self, monkeypatch):
+        class FakeResponse:
+            status_code = 200
+            text = (
+                r'<script>"campaign":"https://www.patreon.com/api/campaigns/'
+                r'6876649\"}},"member":null</script>'
+            )
+
+        client = PatreonClient(Config())
+        monkeypatch.setattr(client.session, "get", lambda *args, **kwargs: FakeResponse())
+
+        result = client.get_initial_data("jumperbear")
+
+        assert result["campaign_id"] == "6876649"
+
+
 class TestParsePost:
     """Test full post parsing from API response."""
 

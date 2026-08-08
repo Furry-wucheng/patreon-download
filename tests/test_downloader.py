@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from patreon_download.downloader import HashRegistry, _compute_hash, _collect_tasks
+from patreon_download.downloader import (
+    HashRegistry,
+    _collect_tasks,
+    _compute_hash,
+    _download_file_progress,
+)
 from patreon_download.models import MediaItem
 
 
@@ -85,6 +90,121 @@ class TestComputeHash:
         a.write_bytes(b"content A")
         b.write_bytes(b"content B")
         assert _compute_hash(a) != _compute_hash(b)
+
+
+class TestDownloadRetries:
+    """Test retry behavior for media file downloads."""
+
+    def test_progress_download_retries_then_succeeds(self, tmp_path, monkeypatch):
+        class FakeResponse:
+            headers = {"content-length": "4"}
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield b"data"
+
+        class FakeConsole:
+            def print(self, *args, **kwargs):
+                pass
+
+        class FakeProgress:
+            console = FakeConsole()
+
+            def __init__(self):
+                self.descriptions = []
+
+            def reset(self, task_id, **kwargs):
+                self.descriptions.append(kwargs.get("description", ""))
+
+            def update(self, task_id, **kwargs):
+                self.descriptions.append(kwargs.get("description", ""))
+
+            def advance(self, task_id, amount):
+                pass
+
+        calls = 0
+
+        def fake_get(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise OSError("temporary connection failure")
+            return FakeResponse()
+
+        delays = []
+        monkeypatch.setattr("patreon_download.downloader.requests.get", fake_get)
+        monkeypatch.setattr("patreon_download.downloader.time.sleep", delays.append)
+        progress = FakeProgress()
+        dest = tmp_path / "image.png"
+
+        ok = _download_file_progress(
+            "https://example.com/image.png",
+            dest,
+            "cookie",
+            progress,
+            task_id=1,
+            max_retries=3,
+        )
+
+        assert ok is True
+        assert calls == 3
+        assert delays == [1, 2]
+        assert dest.read_bytes() == b"data"
+        assert any("RETRY 2/3" in text for text in progress.descriptions)
+        assert any("RETRY 3/3" in text for text in progress.descriptions)
+
+    def test_failed_partial_download_is_removed(self, tmp_path, monkeypatch):
+        class BrokenResponse:
+            headers = {"content-length": "10"}
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield b"partial"
+                raise OSError("connection lost")
+
+        class FakeConsole:
+            def print(self, *args, **kwargs):
+                pass
+
+        class FakeProgress:
+            console = FakeConsole()
+
+            def reset(self, task_id, **kwargs):
+                pass
+
+            def update(self, task_id, **kwargs):
+                pass
+
+            def advance(self, task_id, amount):
+                pass
+
+        calls = 0
+
+        def fake_get(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return BrokenResponse()
+
+        monkeypatch.setattr("patreon_download.downloader.requests.get", fake_get)
+        monkeypatch.setattr("patreon_download.downloader.time.sleep", lambda delay: None)
+        dest = tmp_path / "broken.png"
+
+        ok = _download_file_progress(
+            "https://example.com/broken.png",
+            dest,
+            "cookie",
+            FakeProgress(),
+            task_id=1,
+            max_retries=3,
+        )
+
+        assert ok is False
+        assert calls == 3
+        assert not dest.exists()
 
 
 class TestCollectTasks:

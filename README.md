@@ -2,6 +2,8 @@
 
 一个基于 Python 的 Patreon 内容下载命令行工具，支持下载单个帖子、博主全部帖子和 Shop 商品。
 
+本项目基于https://github.com/patrickkfkan/patreon-dl项目参考重写为Python版本。
+
 ## 功能
 
 - **下载单个帖子** — 通过帖子 URL 或 ID 下载图片、视频、音频、附件

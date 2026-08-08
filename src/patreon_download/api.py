@@ -156,7 +156,9 @@ class PatreonClient:
 
         # Method 3: Next.js streaming
         if not campaign_id:
-            match = re.search(r"https://www\.patreon\.com/api/campaigns/(.+?)\"", html)
+            # The URL is often embedded in JSON as .../1234567\". Capture only
+            # the numeric ID so the escape backslash is not sent to the API.
+            match = re.search(r"https://www\.patreon\.com/api/campaigns/(\d+)", html)
             if match:
                 campaign_id = match.group(1)
 
@@ -192,7 +194,17 @@ class PatreonClient:
         """Fetch and parse a single post."""
         data = self._get(
             f"https://www.patreon.com/api/posts/{post_id}",
-            params={"include": _POST_INCLUDES, "json-api-version": "1.0"},
+            params={
+                "fields[post]": ",".join([
+                    "change_visibility_at", "comment_count", "content", "content_teaser_text",
+                    "image", "is_paid", "is_suspended", "moderation_status", "like_count",
+                    "media_file_duration_seconds", "post_file", "post_metadata", "post_type",
+                    "published_at", "thumbnail", "thumbnail_url", "title", "url",
+                    "current_user_can_view", "external_embed_domain", "teaser_text",
+                ]),
+                "include": _POST_INCLUDES,
+                "json-api-version": "1.0",
+            },
             delay=False,
         )
         return self._parse_post(data)
@@ -295,6 +307,13 @@ class PatreonClient:
         next_url = None
 
         params = {
+            "fields[post]": ",".join([
+                "change_visibility_at", "comment_count", "content", "content_teaser_text",
+                "image", "is_paid", "is_suspended", "moderation_status", "like_count",
+                "media_file_duration_seconds", "post_file", "post_metadata", "post_type",
+                "published_at", "thumbnail", "thumbnail_url", "title", "url",
+                "current_user_can_view", "external_embed_domain", "teaser_text",
+            ]),
             "include": _POST_INCLUDES,
             "sort": "-published_at",
             "json-api-version": "1.0",
