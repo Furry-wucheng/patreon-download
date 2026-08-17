@@ -44,5 +44,8 @@ uv run pytest tests/ --cov=patreon_download
 - README均为中文；文档改动保持中文。
 - 文件命名：`utils.sanitize_filename`（替换 `<>:"/\|?*`、截断 200 字符）；帖子目录名走 `post_dir_format` 模板（`{yyyy}-{mm}-{dd}_{title}` 等）。
 - 兼容性：依赖极简（requests + rich），新增依赖需谨慎。
-- git格式请使用：fix/feat....(model):desc，开头请使用规范fix/feat..表明这次修改，model可以是模块或者功能可以使用英文，desc请使用中文，如改动较多请进行分点。
-  - 必须在 commit 前把 commit message 内容先给我审核，审核完再进行 commit 和 push 操作
+- Git commit message 标题统一使用 `type(scope): 中文描述` 格式：
+  - `type` 和 `scope` 必须使用英文；`type` 使用 `feat`、`fix`、`refactor`、`docs`、`test`、`chore` 等规范类型，`scope` 使用英文模块名或功能名。
+  - `desc` 必须使用中文，简洁说明本次修改的核心内容。
+  - 改动较多或需要补充上下文时，在标题后空一行，并在正文使用 `- 中文分点说明` 列出主要改动；简单改动无需强行增加分点。
+  - 必须在 commit 前把完整 commit message（包括正文分点）交给用户审核，审核通过后才能执行 commit 和 push。

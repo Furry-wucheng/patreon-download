@@ -396,3 +396,239 @@ class TestParseProduct:
         product = client._parse_product(sample_product_response, product_data)
 
         assert product.content_media == []
+
+
+# ── Date range filtering ─────────────────────────────────────────
+
+def _post_item(post_id: str, published_at: str) -> dict:
+    return {
+        "id": post_id,
+        "type": "post",
+        "attributes": {"title": f"Post {post_id}", "published_at": published_at},
+        "relationships": {
+            "images": {"data": []},
+            "audio": {"data": None},
+            "attachments_media": {"data": []},
+        },
+    }
+
+
+class TestFetchAllPostsDateFilter:
+    """Test time-range filtering and early-stop pagination."""
+
+    def _client_with_pages(self, monkeypatch, pages, config=None):
+        client = PatreonClient(config or Config(cookie="test"))
+        calls = {"count": 0}
+
+        def fake_get(url, params=None, delay=True):
+            calls["count"] += 1
+            return pages[min(calls["count"], len(pages)) - 1]
+
+        monkeypatch.setattr(client, "_get", fake_get)
+        return client, calls
+
+    def test_filter_in_range_keeps_matching_posts(self, monkeypatch):
+        page1 = {
+            "data": [
+                _post_item("1", "2025-01-10T00:00:00Z"),
+                _post_item("2", "2025-01-05T00:00:00Z"),
+            ],
+            "included": [],
+            "meta": {"pagination": {"total": 4}},
+            "links": {"next": "https://api/next"},
+        }
+        page2 = {
+            "data": [
+                _post_item("3", "2024-12-20T00:00:00Z"),
+                _post_item("4", "2024-11-01T00:00:00Z"),
+            ],
+            "included": [],
+            "meta": {"pagination": {"total": 4}},
+            "links": {},
+        }
+        config = Config(cookie="test", date_from="2025-01-01")
+        client, calls = self._client_with_pages(monkeypatch, [page1, page2], config)
+
+        posts = client.fetch_all_posts("camp_1", "user_1")
+
+        # 页面 2 整页早于 date_from → 早停；页面 1 内帖子全部保留
+        assert calls["count"] == 2
+        assert [p.id for p in posts] == ["1", "2"]
+
+    def test_early_stop_skips_older_pages(self, monkeypatch):
+        page1 = {
+            "data": [
+                _post_item("1", "2025-01-10T00:00:00Z"),
+                _post_item("2", "2025-01-05T00:00:00Z"),
+            ],
+            "included": [],
+            "meta": {"pagination": {"total": 4}},
+            "links": {"next": "https://api/next"},
+        }
+        page2 = {
+            "data": [_post_item("3", "2024-12-20T00:00:00Z")],
+            "included": [],
+            "meta": {"pagination": {"total": 4}},
+            "links": {},
+        }
+        config = Config(cookie="test", date_from="2025-02-01")
+        client, calls = self._client_with_pages(monkeypatch, [page1, page2], config)
+
+        posts = client.fetch_all_posts("camp_1", "user_1")
+
+        # 第 1 页整页早于 date_from → 不再请求第 2 页
+        assert calls["count"] == 1
+        assert posts == []
+
+    def test_filter_without_early_stop_when_page_overlaps(self, monkeypatch):
+        page1 = {
+            "data": [
+                _post_item("1", "2025-01-10T00:00:00Z"),
+                _post_item("2", "2025-01-05T00:00:00Z"),
+            ],
+            "included": [],
+            "meta": {"pagination": {"total": 4}},
+            "links": {"next": "https://api/next"},
+        }
+        page2 = {
+            "data": [
+                _post_item("3", "2024-12-20T00:00:00Z"),
+                _post_item("4", "2024-11-01T00:00:00Z"),
+            ],
+            "included": [],
+            "meta": {"pagination": {"total": 4}},
+            "links": {},
+        }
+        config = Config(cookie="test", date_from="2024-12-01")
+        client, calls = self._client_with_pages(monkeypatch, [page1, page2], config)
+
+        posts = client.fetch_all_posts("camp_1", "user_1")
+
+        assert calls["count"] == 2
+        assert [p.id for p in posts] == ["1", "2", "3"]
+
+    def test_filter_date_to(self, monkeypatch):
+        page1 = {
+            "data": [_post_item("1", "2025-01-10T00:00:00Z")],
+            "included": [],
+            "meta": {"pagination": {"total": 2}},
+            "links": {"next": "https://api/next"},
+        }
+        page2 = {
+            "data": [_post_item("2", "2024-12-01T00:00:00Z")],
+            "included": [],
+            "meta": {"pagination": {"total": 2}},
+            "links": {},
+        }
+        config = Config(cookie="test", date_to="2025-01-05")
+        client, calls = self._client_with_pages(monkeypatch, [page1, page2], config)
+
+        posts = client.fetch_all_posts("camp_1", "user_1")
+
+        assert calls["count"] == 2  # date_to 不触发早停
+        assert [p.id for p in posts] == ["2"]
+
+    def test_no_early_stop_when_page_has_undated_post(self, monkeypatch):
+        undated = _post_item("2", "2025-01-05T00:00:00Z")
+        undated["attributes"]["published_at"] = None
+        page1 = {
+            "data": [_post_item("1", "2025-01-10T00:00:00Z"), undated],
+            "included": [],
+            "meta": {"pagination": {"total": 3}},
+            "links": {"next": "https://api/next"},
+        }
+        page2 = {
+            "data": [_post_item("3", "2024-11-01T00:00:00Z")],
+            "included": [],
+            "meta": {"pagination": {"total": 3}},
+            "links": {},
+        }
+        config = Config(cookie="test", date_from="2025-01-01")
+        client, calls = self._client_with_pages(monkeypatch, [page1, page2], config)
+
+        posts = client.fetch_all_posts("camp_1", "user_1")
+
+        # 页面存在无日期帖子 → 不早停；无日期帖子保留
+        assert calls["count"] == 2
+        assert [p.id for p in posts] == ["1", "2"]
+
+    def test_no_filter_fetches_all(self, monkeypatch):
+        page1 = {
+            "data": [_post_item("1", "2025-01-10T00:00:00Z")],
+            "included": [],
+            "meta": {"pagination": {"total": 2}},
+            "links": {"next": "https://api/next"},
+        }
+        page2 = {
+            "data": [_post_item("2", "2024-12-01T00:00:00Z")],
+            "included": [],
+            "meta": {"pagination": {"total": 2}},
+            "links": {},
+        }
+        client, calls = self._client_with_pages(monkeypatch, [page1, page2])
+
+        posts = client.fetch_all_posts("camp_1", "user_1")
+
+        assert calls["count"] == 2
+        assert [p.id for p in posts] == ["1", "2"]
+
+
+class TestFetchAllProductsDateFilter:
+    """Test time-range filtering for shop products."""
+
+    def test_products_filtered_by_date(self, monkeypatch):
+        product1 = {
+            "id": "prod_001",
+            "type": "product",
+            "attributes": {},
+            "relationships": {
+                "product-variant": {
+                    "data": [{"id": "var_001", "type": "product-variant"}]
+                },
+                "preview_media": {"data": []},
+                "content_media": {"data": []},
+            },
+        }
+        product2 = {
+            "id": "prod_002",
+            "type": "product",
+            "attributes": {},
+            "relationships": {
+                "product-variant": {
+                    "data": [{"id": "var_002", "type": "product-variant"}]
+                },
+                "preview_media": {"data": []},
+                "content_media": {"data": []},
+            },
+        }
+        response = {
+            "data": [product1, product2],
+            "included": [
+                {
+                    "id": "var_001",
+                    "type": "product-variant",
+                    "attributes": {
+                        "name": "New Pack",
+                        "published_at_datetime": "2025-06-01T00:00:00Z",
+                    },
+                },
+                {
+                    "id": "var_002",
+                    "type": "product-variant",
+                    "attributes": {
+                        "name": "Old Pack",
+                        "published_at_datetime": "2024-03-01T00:00:00Z",
+                    },
+                },
+            ],
+            "links": {},
+        }
+        config = Config(cookie="test", date_from="2025-01-01", date_to="2025-12-31")
+        client = PatreonClient(config)
+        calls = {"count": 0}
+        monkeypatch.setattr(client, "_get", lambda *a, **kw: response)
+
+        products = client.fetch_all_products("camp_1")
+
+        assert [p.id for p in products] == ["prod_001"]
+        assert products[0].name == "New Pack"

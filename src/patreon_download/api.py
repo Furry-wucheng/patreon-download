@@ -10,6 +10,7 @@ from requests.exceptions import RequestException
 
 from .config import Config
 from .models import MediaItem, Post, Product
+from .utils import parse_date, published_in_range
 
 def _safe_get(d, *keys, default=None):
     """Safely traverse nested dicts, treating None values as missing."""
@@ -302,9 +303,17 @@ class PatreonClient:
     def fetch_all_posts(
         self, campaign_id: str, current_user_id: str | None, on_page=None
     ) -> list[Post]:
-        """Fetch all posts for a campaign with auto-pagination."""
+        """Fetch all posts for a campaign with auto-pagination.
+
+        Posts are filtered by ``config.date_from`` / ``config.date_to``.
+        Since the API returns posts sorted by ``published_at`` descending,
+        pagination stops early once the whole page is older than ``date_from``.
+        """
         all_posts: list[Post] = []
         next_url = None
+        date_from = self.config.date_from
+        date_to = self.config.date_to
+        has_filter = bool(date_from or date_to)
 
         params = {
             "fields[post]": ",".join([
@@ -336,13 +345,35 @@ class PatreonClient:
             included = json_data.get("included") or []
             total = _safe_get(json_data, "meta", "pagination", "total", default=0) or 0
 
+            page_has_undated = False
+            page_last_date = None
             for item in data_list:
                 if item.get("type") == "post":
                     post_json = {"data": item, "included": included}
-                    all_posts.append(self._parse_post(post_json))
+                    post = self._parse_post(post_json)
+                    if not has_filter or published_in_range(
+                        post.published_at, date_from, date_to
+                    ):
+                        all_posts.append(post)
+                    if post.published_at:
+                        page_last_date = parse_date(post.published_at) or page_last_date
+                    else:
+                        page_has_undated = True
 
             if on_page:
                 on_page(len(all_posts), total)
+
+            # 早停：页面按发布时间倒序，若整页均已早于 date_from 则无需继续翻页。
+            # 页面存在无日期帖子时保守起见不早停，避免漏掉。
+            if date_from:
+                lower = parse_date(date_from)
+                if (
+                    lower
+                    and not page_has_undated
+                    and page_last_date
+                    and page_last_date < lower
+                ):
+                    break
 
             next_url = _safe_get(json_data, "links", "next")
             if not next_url:
@@ -361,9 +392,16 @@ class PatreonClient:
     # ── Shop Products ─────────────────────────────────────────────
 
     def fetch_all_products(self, campaign_id: str, on_page=None) -> list[Product]:
-        """Fetch all shop products for a campaign."""
+        """Fetch all shop products for a campaign.
+
+        Products are filtered by ``config.date_from`` / ``config.date_to``
+        (based on their publish date), with early-stop pagination.
+        """
         all_products: list[Product] = []
         offset = 0
+        date_from = self.config.date_from
+        date_to = self.config.date_to
+        has_filter = bool(date_from or date_to)
 
         while True:
             json_data = self._get(
@@ -374,12 +412,33 @@ class PatreonClient:
             if not data_list:
                 break
 
+            page_has_undated = False
+            page_last_date = None
             for item in data_list:
                 if item.get("type") == "product":
-                    all_products.append(self._parse_product(json_data, item))
+                    product = self._parse_product(json_data, item)
+                    if not has_filter or published_in_range(
+                        product.published_at, date_from, date_to
+                    ):
+                        all_products.append(product)
+                    if product.published_at:
+                        page_last_date = parse_date(product.published_at) or page_last_date
+                    else:
+                        page_has_undated = True
 
             if on_page:
                 on_page(len(all_products))
+
+            # 早停：商品按发布时间倒序，整页均早于 date_from 时停止翻页
+            if date_from:
+                lower = parse_date(date_from)
+                if (
+                    lower
+                    and not page_has_undated
+                    and page_last_date
+                    and page_last_date < lower
+                ):
+                    break
 
             if not _safe_get(json_data, "links", "next"):
                 break

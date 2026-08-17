@@ -25,6 +25,10 @@ _HASH_ALGO = "sha256"
 _REGISTRY_NAME = ".hashes.json"
 
 
+class CancelledError(Exception):
+    """Raised when a download batch is cancelled by the user (GUI stop)."""
+
+
 # ── Hash registry ────────────────────────────────────────────────
 
 class HashRegistry:
@@ -304,10 +308,13 @@ def _download_batch_sequential(
     tasks: list[tuple[str, Path, str]],
     skip_existing: bool, registry: HashRegistry | None,
     max_retries: int = 3,
+    cancel_event: threading.Event | None = None,
 ) -> int:
     """Download files one by one with individual progress bars."""
     count = 0
     for url, dest, cookie in tasks:
+        if cancel_event is not None and cancel_event.is_set():
+            raise CancelledError()
         with Progress(
             *_PROGRESS_COLUMNS,
             console=console, transient=True,
@@ -327,6 +334,7 @@ def _download_batch_threaded(
     max_workers: int,
     skip_existing: bool, registry: HashRegistry | None,
     max_retries: int = 3,
+    cancel_event: threading.Event | None = None,
 ) -> int:
     """Download files concurrently with a shared progress display."""
     if not tasks:
@@ -361,6 +369,8 @@ def _download_batch_threaded(
                 for url, dest, cookie in tasks
             ]
             for f in as_completed(futures):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CancelledError()
                 f.result()
 
     return count
@@ -369,6 +379,7 @@ def _download_batch_threaded(
 def _download_media_items(
     items: list[MediaItem], dest_dir: Path, config: Config,
     subdir: str | None = None, registry: HashRegistry | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> int:
     """Download a list of media items. Uses threading if configured."""
     tasks, skipped = _collect_tasks(
@@ -384,10 +395,10 @@ def _download_media_items(
     if config.enable_threading:
         return _download_batch_threaded(
             tasks, config.max_workers, config.skip_existing, registry,
-            config.max_retries,
+            config.max_retries, cancel_event,
         )
     return _download_batch_sequential(
-        tasks, config.skip_existing, registry, config.max_retries,
+        tasks, config.skip_existing, registry, config.max_retries, cancel_event,
     )
 
 
@@ -400,6 +411,7 @@ def download_post(
     author_name: str = "",
     use_author_dir: bool = True,
     registry: HashRegistry | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> int:
     """Download a single post and all its media. Returns download count."""
     author = author_name or post.author_name or "unknown"
@@ -433,12 +445,15 @@ def download_post(
         all_items.append(post.video)
     all_items.extend(post.attachments)
 
-    return _download_media_items(all_items, post_dir, config, registry=registry)
+    return _download_media_items(
+        all_items, post_dir, config, registry=registry, cancel_event=cancel_event,
+    )
 
 
 def download_product(
     product: Product, output_dir: Path, config: Config,
     author_name: str = "", registry: HashRegistry | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> int:
     """Download a single shop product. Returns download count."""
     author = author_name or "unknown"
@@ -459,8 +474,14 @@ def download_product(
         }, prod_dir / "info.json")
 
     count = 0
-    count += _download_media_items(product.preview_media, prod_dir, config, "preview", registry=registry)
-    count += _download_media_items(product.content_media, prod_dir, config, "content", registry=registry)
+    count += _download_media_items(
+        product.preview_media, prod_dir, config, "preview",
+        registry=registry, cancel_event=cancel_event,
+    )
+    count += _download_media_items(
+        product.content_media, prod_dir, config, "content",
+        registry=registry, cancel_event=cancel_event,
+    )
     return count
 
 

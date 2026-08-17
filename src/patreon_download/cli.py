@@ -37,6 +37,34 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_date_filter_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--date-from", metavar="YYYY-MM-DD",
+        help="Only download content published on or after this date",
+    )
+    parser.add_argument(
+        "--date-to", metavar="YYYY-MM-DD",
+        help="Only download content published on or before this date",
+    )
+
+
+def _apply_date_filter_overrides(args, config: Config) -> None:
+    """Apply --date-from/--date-to CLI overrides onto the loaded config."""
+    if getattr(args, "date_from", None):
+        config.date_from = args.date_from
+    if getattr(args, "date_to", None):
+        config.date_to = args.date_to
+
+
+def _print_active_filter(config: Config) -> None:
+    """Print the active date filter range (if any)."""
+    if config.date_from or config.date_to:
+        console.print(
+            f"Date filter: [cyan]{config.date_from or 'unlimited'}"
+            f"[/cyan] ~ [cyan]{config.date_to or 'unlimited'}[/cyan]"
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="patreon-dl",
@@ -57,11 +85,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_user = sub.add_parser("user", help="Download all posts from a creator")
     p_user.add_argument("url", help="Creator URL (e.g. https://www.patreon.com/creator/posts)")
     _add_common_args(p_user)
+    _add_date_filter_args(p_user)
 
     # ── shop ──
     p_shop = sub.add_parser("shop", help="Download shop items from a creator")
     p_shop.add_argument("url", help="Shop URL (e.g. https://www.patreon.com/creator/shop)")
     _add_common_args(p_shop)
+    _add_date_filter_args(p_shop)
+
+    # ── gui ──
+    p_gui = sub.add_parser("gui", help="Launch the graphical interface")
+    p_gui.add_argument(
+        "--config", "-c", metavar="PATH",
+        help="Path to config.json (default: ./config.json or ~/.patreon-dl/config.json)",
+    )
 
     return parser
 
@@ -111,6 +148,7 @@ def _cmd_post(args) -> int:
 
 def _cmd_user(args) -> int:
     config = _load_config(args)
+    _apply_date_filter_overrides(args, config)
     errors = config.validate()
     if errors:
         for e in errors:
@@ -141,6 +179,7 @@ def _cmd_user(args) -> int:
     author_name = initial.get("author_name", user_info["value"])
     console.print(f"Campaign ID: [cyan]{campaign_id}[/cyan]")
     console.print(f"Author: [bold]{author_name}[/bold]")
+    _print_active_filter(config)
 
     def on_page(loaded, total):
         console.print(f"  Fetched {loaded}/{total} posts ...")
@@ -163,6 +202,7 @@ def _cmd_user(args) -> int:
 
 def _cmd_shop(args) -> int:
     config = _load_config(args)
+    _apply_date_filter_overrides(args, config)
     errors = config.validate()
     if errors:
         for e in errors:
@@ -191,6 +231,7 @@ def _cmd_shop(args) -> int:
 
     author_name = initial.get("author_name", user_info["value"])
     console.print(f"Author: [bold]{author_name}[/bold]")
+    _print_active_filter(config)
 
     def on_page(loaded):
         console.print(f"  Fetched {loaded} products ...")
@@ -211,6 +252,14 @@ def _cmd_shop(args) -> int:
     return 0
 
 
+def _cmd_gui(args) -> int:
+    """Launch the tkinter GUI."""
+    from .gui import main as gui_main
+
+    gui_main(config_path=getattr(args, "config", None))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -219,6 +268,7 @@ def main(argv: list[str] | None = None) -> None:
         "post": _cmd_post,
         "user": _cmd_user,
         "shop": _cmd_shop,
+        "gui": _cmd_gui,
     }
     try:
         sys.exit(dispatch[args.command](args))

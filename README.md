@@ -1,6 +1,6 @@
 # Patreon Downloader
 
-一个基于 Python 的 Patreon 内容下载命令行工具，支持下载单个帖子、博主全部帖子和 Shop 商品。
+一个基于 Python 的 Patreon 内容下载工具，支持命令行与图形界面（GUI），可下载单个帖子、博主全部帖子和 Shop 商品。
 
 本项目基于https://github.com/patrickkfkan/patreon-dl项目参考重写为Python版本。
 
@@ -9,6 +9,8 @@
 - **下载单个帖子** — 通过帖子 URL 或 ID 下载图片、视频、音频、附件
 - **下载博主全部帖子** — 批量下载某位创作者的所有帖子（自动分页）
 - **下载 Shop 商品** — 下载创作者商店中的商品及其媒体文件
+- **图形界面（GUI）** — tkinter 界面，配置编辑与下载操作一站式完成，配置修改自动写回配置文件
+- **按时间范围过滤** — 通过 `date_from` / `date_to` 只下载指定时间段内发布的内容
 - **自定义文件夹命名** — 通过模板变量自定义帖子文件夹名称
 - **进度条显示** — 使用 rich 库显示下载进度、速度和剩余时间
 - **断点续传** — 已存在的文件自动跳过
@@ -67,7 +69,9 @@ cp config.json.example config.json
     "output_info_json": true,
     "enable_threading": false,
     "max_workers": 4,
-    "skip_existing": true
+    "skip_existing": true,
+    "date_from": "",
+    "date_to": ""
 }
 ```
 
@@ -84,12 +88,63 @@ cp config.json.example config.json
 | `enable_threading` | bool | `false` | 是否启用多线程下载 |
 | `max_workers` | int | `4` | 多线程下载的并发数 |
 | `skip_existing` | bool | `true` | 是否跳过已存在的文件（基于文件哈希去重） |
+| `date_from` | string | `""` | 只下载此日期（含）之后发布的内容，格式 `YYYY-MM-DD`，留空不限 |
+| `date_to` | string | `""` | 只下载此日期（含）之前发布的内容，格式 `YYYY-MM-DD`，留空不限 |
 
 配置文件的查找顺序：
 
 1. `--config` 参数指定的路径
 2. 当前目录下的 `config.json`
 3. 用户目录下的 `~/.patreon-dl/config.json`
+
+## 按时间范围过滤
+
+`user`（全部帖子）和 `shop`（Shop 商品）下载支持按发布时间过滤，
+只需要在配置文件中填写 `date_from` / `date_to`（格式 `YYYY-MM-DD`，区间包含两端）：
+
+```json
+{
+    "date_from": "2024-01-01",
+    "date_to": "2024-12-31"
+}
+```
+
+- 只填写 `date_from`：下载该日期及之后发布的内容
+- 只填写 `date_to`：下载该日期及之前发布的内容
+- 两者均留空（默认）：不限制，下载全部
+
+由于帖子按发布时间倒序返回，设置 `date_from` 后会自动提前终止翻页，
+大博主也能快速只抓取指定时间段的内容。命令行下也可以用参数临时覆盖：
+
+```bash
+patreon-dl user <url> --date-from 2024-01-01 --date-to 2024-12-31
+```
+
+## 图形界面（GUI）
+
+内置 tkinter 图形界面（无需额外依赖），支持：
+
+- 编辑全部配置项（Cookie、输出目录、限速、多线程、时间过滤等）
+- **配置双向同步**：启动时自动读取配置文件；点击「保存配置」或开始下载时，界面上的修改会写回原配置文件
+- 选择/新建配置文件（顶部工具栏「浏览…」「重新加载」）
+- 三种任务类型：下载单个帖子 / 全部帖子 / Shop 商品
+- **时间过滤日历选择**：从/至日期只能通过「日历」弹窗选择（输入框为只读），不可手动填写
+- 实时日志显示、运行中可随时「停止」
+
+启动方式：
+
+```bash
+# 一键启动（推荐）：双击即可，自动使用项目内的虚拟环境
+start-gui.bat                # Windows
+./start-gui.sh               # Linux / macOS
+
+# 命令行启动
+patreon-dl gui               # 使用默认查找顺序的配置文件
+patreon-dl gui --config 路径  # 指定配置文件
+python -m patreon_download.gui
+```
+
+> **注意**：GUI 需要 Python 的 tkinter 支持（Windows 官方安装包默认自带；Linux 下可能需要 `python3-tk`）。
 
 ## 使用方法
 
@@ -164,6 +219,9 @@ patreon-dl post <url> --output ./my-downloads
 
 # 指定请求间隔
 patreon-dl user <url> --delay 5
+
+# 按时间范围过滤（仅 user / shop 命令）
+patreon-dl user <url> --date-from 2024-01-01 --date-to 2024-06-30
 ```
 
 | 参数 | 缩写 | 说明 |
@@ -171,6 +229,8 @@ patreon-dl user <url> --delay 5
 | `--config` | `-c` | 配置文件路径 |
 | `--output` | `-o` | 输出目录 |
 | `--delay` | | 请求间隔（秒） |
+| `--date-from` | | 只下载此日期及之后发布的内容（仅 `user`/`shop`） |
+| `--date-to` | | 只下载此日期及之前发布的内容（仅 `user`/`shop`） |
 
 ## 帖子文件夹命名模板
 
@@ -248,15 +308,18 @@ patreon-dl user <url> --delay 5
 patreon-download/
 ├── pyproject.toml
 ├── config.json.example
+├── start-gui.bat          # Windows 一键启动 GUI
+├── start-gui.sh           # Linux/macOS 一键启动 GUI
 ├── src/
 │   └── patreon_download/
 │       ├── __init__.py
 │       ├── __main__.py
 │       ├── cli.py          # CLI 入口
-│       ├── config.py       # 配置加载
+│       ├── config.py       # 配置加载与写回
 │       ├── api.py          # Patreon API 客户端
 │       ├── models.py       # 数据模型
 │       ├── downloader.py   # 文件下载
+│       ├── gui.py          # tkinter 图形界面
 │       └── utils.py        # 工具函数
 └── tests/
     ├── conftest.py         # 测试 fixtures

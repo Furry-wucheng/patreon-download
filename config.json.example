@@ -7,5 +7,7 @@
     "output_info_json": true,
     "enable_threading": false,
     "max_workers": 4,
-    "skip_existing": true
+    "skip_existing": true,
+    "date_from": "",
+    "date_to": ""
 }

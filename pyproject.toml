@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 patreon-dl = "patreon_download.cli:main"
+patreon-dl-gui = "patreon_download.gui:main"
 
 [build-system]
 requires = ["hatchling"]

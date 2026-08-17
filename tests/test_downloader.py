@@ -1,14 +1,17 @@
 """Tests for downloader.py — hash registry and dedup logic."""
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
 
 from patreon_download.downloader import (
+    CancelledError,
     HashRegistry,
     _collect_tasks,
     _compute_hash,
+    _download_batch_sequential,
     _download_file_progress,
 )
 from patreon_download.models import MediaItem
@@ -247,3 +250,58 @@ class TestCollectTasks:
         ]
         tasks, skipped = _collect_tasks(items, tmp_path, "cookie")
         assert len(tasks) == 1
+
+
+class TestCancelEvent:
+    """Test cancellation support for batch downloads."""
+
+    def test_sequential_batch_raises_cancelled(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("patreon_download.downloader.requests.get", lambda *a, **kw: 1 / 0)
+        tasks = [
+            ("https://example.com/a.jpg", tmp_path / "a.jpg", "cookie"),
+            ("https://example.com/b.jpg", tmp_path / "b.jpg", "cookie"),
+        ]
+        cancel_event = threading.Event()
+        cancel_event.set()
+
+        with pytest.raises(CancelledError):
+            _download_batch_sequential(
+                tasks, skip_existing=False, registry=None, max_retries=1,
+                cancel_event=cancel_event,
+            )
+
+    def test_sequential_batch_without_event_runs(self, tmp_path, monkeypatch):
+        class FakeResponse:
+            headers = {"content-length": "4"}
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, chunk_size):
+                yield b"data"
+
+        class FakeConsole:
+            def print(self, *args, **kwargs):
+                pass
+
+        class FakeProgress:
+            console = FakeConsole()
+
+            def __init__(self):
+                pass
+
+            def reset(self, task_id, **kwargs):
+                pass
+
+            def update(self, task_id, **kwargs):
+                pass
+
+            def advance(self, task_id, amount):
+                pass
+
+        monkeypatch.setattr("patreon_download.downloader.requests.get", lambda *a, **kw: FakeResponse())
+        tasks = [("https://example.com/a.jpg", tmp_path / "a.jpg", "cookie")]
+        count = _download_batch_sequential(
+            tasks, skip_existing=False, registry=None, max_retries=1,
+        )
+        assert count == 1

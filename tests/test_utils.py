@@ -2,7 +2,14 @@
 
 import pytest
 
-from patreon_download.utils import extract_post_id, extract_user_info, format_post_dirname, sanitize_filename
+from patreon_download.utils import (
+    extract_post_id,
+    extract_user_info,
+    format_post_dirname,
+    parse_date,
+    published_in_range,
+    sanitize_filename,
+)
 
 
 # ── extract_post_id ──────────────────────────────────────────────
@@ -183,3 +190,77 @@ class TestFormatPostDirname:
             published_at="2025-01-01T00:00:00Z",
         )
         assert result == "2025-01-01_测试作品"
+
+
+# ── parse_date ───────────────────────────────────────────────────
+
+class TestParseDate:
+    """Test date parsing for time-range filtering."""
+
+    def test_basic_date(self):
+        assert parse_date("2025-01-15") is not None
+        assert parse_date("2025-01-15").isoformat() == "2025-01-15"
+
+    def test_iso_datetime(self):
+        d = parse_date("2025-01-15T12:00:00.000+00:00")
+        assert d is not None
+        assert d.isoformat() == "2025-01-15"
+
+    def test_iso_short(self):
+        d = parse_date("2025-01-15T00:00:00Z")
+        assert d is not None
+        assert d.isoformat() == "2025-01-15"
+
+    def test_empty_returns_none(self):
+        assert parse_date("") is None
+        assert parse_date(None) is None
+
+    @pytest.mark.parametrize("value", [
+        "2025-13-01",   # 月份越界
+        "2025-02-30",   # 日期越界
+        "15/01/2025",   # 格式错误
+        "hello",        # 非日期
+        "2025-01",      # 缺少日期
+    ])
+    def test_invalid_returns_none(self, value):
+        assert parse_date(value) is None
+
+    def test_whitespace_stripped(self):
+        assert parse_date("  2025-01-15  ") is not None
+
+
+# ── published_in_range ───────────────────────────────────────────
+
+class TestPublishedInRange:
+    """Test date-range filtering of published_at timestamps."""
+
+    def test_no_filter_keeps_everything(self):
+        assert published_in_range("2025-01-15T00:00:00Z", "", "") is True
+
+    def test_within_range(self):
+        assert published_in_range("2025-06-15T00:00:00Z", "2025-01-01", "2025-12-31") is True
+
+    def test_before_range(self):
+        assert published_in_range("2024-12-31T00:00:00Z", "2025-01-01", "") is False
+
+    def test_after_range(self):
+        assert published_in_range("2026-01-01T00:00:00Z", "", "2025-12-31") is False
+
+    def test_inclusive_bounds(self):
+        assert published_in_range("2025-01-01T00:00:00Z", "2025-01-01", "2025-12-31") is True
+        assert published_in_range("2025-12-31T23:59:59Z", "2025-01-01", "2025-12-31") is True
+
+    def test_from_only(self):
+        assert published_in_range("2025-06-15T00:00:00Z", "2025-01-01", "") is True
+        assert published_in_range("2024-12-31T00:00:00Z", "2025-01-01", "") is False
+
+    def test_to_only(self):
+        assert published_in_range("2025-06-15T00:00:00Z", "", "2025-12-31") is True
+        assert published_in_range("2026-01-01T00:00:00Z", "", "2025-12-31") is False
+
+    def test_missing_date_kept(self):
+        """无法判断日期的帖子在过滤时保留，避免误删。"""
+        assert published_in_range(None, "2025-01-01", "2025-12-31") is True
+
+    def test_unparseable_date_kept(self):
+        assert published_in_range("not-a-date", "2025-01-01", "2025-12-31") is True

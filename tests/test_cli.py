@@ -50,3 +50,38 @@ class TestArgParsing:
         parser = build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["download", "https://x.com/posts/1"])
+
+    def test_gui_command(self):
+        parser = build_parser()
+        args = parser.parse_args(["gui"])
+        assert args.command == "gui"
+
+    def test_gui_command_with_config(self):
+        parser = build_parser()
+        args = parser.parse_args(["gui", "-c", "my.json"])
+        assert args.command == "gui"
+        assert args.config == "my.json"
+
+    def test_user_date_filter_args(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "user", "https://www.patreon.com/creator/posts",
+            "--date-from", "2024-01-01", "--date-to", "2024-06-30",
+        ])
+        assert args.date_from == "2024-01-01"
+        assert args.date_to == "2024-06-30"
+
+    def test_shop_date_filter_args(self):
+        parser = build_parser()
+        args = parser.parse_args([
+            "shop", "https://www.patreon.com/creator/shop",
+            "--date-from", "2025-01-01",
+        ])
+        assert args.date_from == "2025-01-01"
+        assert args.date_to is None
+
+    def test_post_has_no_date_filter_args(self):
+        """单帖下载不提供时间过滤参数。"""
+        parser = build_parser()
+        args = parser.parse_args(["post", "https://www.patreon.com/posts/12345"])
+        assert not hasattr(args, "date_from")

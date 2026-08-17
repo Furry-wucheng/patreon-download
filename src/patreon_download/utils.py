@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import date
 from urllib.parse import parse_qs, urlparse
 
 
@@ -114,3 +115,52 @@ def sanitize_filename(name: str, max_length: int = 200) -> str:
     if len(name) > max_length:
         name = name[:max_length].rstrip()
     return name or "unnamed"
+
+
+def parse_date(value: str | None) -> date | None:
+    """Parse a date string into a ``datetime.date``.
+
+    Accepts ``YYYY-MM-DD`` and ISO datetime strings like
+    ``2025-01-15T12:00:00.000+00:00`` (only the date part is used).
+    Returns ``None`` when the value is empty or unparseable.
+    """
+    if not value:
+        return None
+    match = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", value.strip())
+    if not match:
+        return None
+    try:
+        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None
+
+
+def published_in_range(
+    published_at: str | None,
+    date_from: str = "",
+    date_to: str = "",
+) -> bool:
+    """Check whether a ``published_at`` timestamp falls inside a date range.
+
+    The range is inclusive on both ends. An empty bound means "no limit".
+    Items whose date cannot be determined (missing/unparseable ``published_at``)
+    are kept, so filtering never silently drops content.
+    """
+    if not date_from and not date_to:
+        return True
+    if not published_at:
+        return True
+
+    published = parse_date(published_at)
+    if published is None:
+        return True
+
+    if date_from:
+        lower = parse_date(date_from)
+        if lower and published < lower:
+            return False
+    if date_to:
+        upper = parse_date(date_to)
+        if upper and published > upper:
+            return False
+    return True
